@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>REDSTAR — Anonymous P2P Mesh</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            background: #000; 
+            color: #ff2222; 
+            font-family: 'Courier New', Courier, monospace; 
+            padding: 20px; 
+            max-width: 850px; 
+            margin: 0 auto; 
+            text-shadow: 0 0 4px rgba(255, 0, 0, 0.8);
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        #matrix-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: -1;
+            opacity: 0.35;
+        }
+
+        .header {
+            border-bottom: 2px solid #ff0000;
+            padding: 10px;
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(8, 0, 0, 0.85);
+            border-radius: 4px;
+        }
+
+        h2 { margin: 0; color: #ff0000; letter-spacing: 2px; }
+
+        #chat-box { 
+            border: 1px solid #aa0000; 
+            height: 420px; 
+            overflow-y: auto; 
+            padding: 12px; 
+            margin-bottom: 15px; 
+            background: rgba(3, 0, 0, 0.9); 
+            box-shadow: inset 0 0 15px rgba(255, 0, 0, 0.3);
+            backdrop-filter: blur(2px);
+        }
+
+        #chat-box::-webkit-scrollbar { width: 6px; }
+        #chat-box::-webkit-scrollbar-thumb { background: #880000; }
+
+        .msg { margin-bottom: 8px; word-break: break-all; color: #ff6666; }
+        .self { color: #ffffff; font-weight: bold; }
+        .system { color: #883333; font-style: italic; }
+        
+        .input-group { display: flex; gap: 10px; }
+        input { 
+            background: rgba(5, 0, 0, 0.9); 
+            border: 1px solid #aa0000; 
+            color: #ff3333; 
+            padding: 12px; 
+            font-family: monospace; 
+            outline: none;
+        }
+        input:focus { border-color: #ff0000; box-shadow: 0 0 8px rgba(255,0,0,0.8); }
+        input[type="text"] { flex: 1; }
+        
+        button { 
+            background: #ff0000; 
+            color: #000; 
+            border: none; 
+            padding: 12px 24px; 
+            cursor: pointer; 
+            font-weight: bold; 
+            font-family: monospace;
+            text-transform: uppercase;
+            box-shadow: 0 0 8px rgba(255, 0, 0, 0.5);
+        }
+        button:hover { background: #cc0000; color: #fff; }
+    </style>
+</head>
+<body>
+
+    <canvas id="matrix-canvas"></canvas>
+
+    <div class="header">
+        <h2>[ ★ REDSTAR ]</h2>
+        <span id="node-status" style="color:#aa0000; font-size:12px; font-weight:bold;">NODES: 0</span>
+    </div>
+    
+    <p class="system" style="background: rgba(0,0,0,0.7); padding: 5px;">Protocols: BitTorrent P2P | Enc: AES-GCM-256 | Zero Server Logs</p>
+    
+    <div id="chat-box"></div>
+
+    <div class="input-group">
+        <input type="text" id="username" placeholder="Rumuz" value="Anon" style="max-width: 120px;">
+        <input type="text" id="message" placeholder="Ağa mesaj bırak..." onkeydown="if(event.key==='Enter') window.sendMsg()">
+        <button onclick="window.sendMsg()">GÖNDER</button>
+    </div>
+
+    <!-- Matrix Rain -->
+    <script>
+        const canvas = document.getElementById('matrix-canvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%&*§ØΞΨ';
+        const fontSize = 14;
+        let columns = Math.floor(canvas.width / fontSize);
+        let drops = Array(columns).fill(1);
+
+        function drawMatrix() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#ff0000';
+            ctx.font = fontSize + 'px monospace';
+
+            for (let i = 0; i < drops.length; i++) {
+                const text = chars.charAt(Math.floor(Math.random() * chars.length));
+                ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+
+                if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+                    drops[i] = 0;
+                }
+                drops[i]++;
+            }
+        }
+        setInterval(drawMatrix, 40);
+    </script>
+
+    <!-- P2P Core Logic -->
+    <script type="module">
+        import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.18.0/torrent.min.js';
+
+        const ROOM_ID = 'REDSTAR_GLOBAL_CELL_2026';
+        const SHARED_PASS = 'RedStarStaticKey2026!';
+
+        let room, sendMessage, getMessage, cryptoKey;
+        let activePeers = new Set();
+
+        async function deriveKey(pass) {
+            const enc = new TextEncoder();
+            const keyMaterial = await crypto.subtle.importKey(
+                "raw", enc.encode(pass), { name: "PBKDF2" }, false, ["deriveKey"]
+            );
+            return crypto.subtle.deriveKey(
+                {
+                    name: "PBKDF2",
+                    salt: enc.encode("REDSTAR_P2P_SALT_2026"),
+                    iterations: 100000,
+                    hash: "SHA-256"
+                },
+                keyMaterial,
+                { name: "AES-GCM", length: 256 },
+                false,
+                ["encrypt", "decrypt"]
+            );
+        }
+
+        async function encryptText(plainText) {
+            const enc = new TextEncoder();
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const ciphertext = await crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv },
+                cryptoKey,
+                enc.encode(plainText)
+            );
+
+            // Buffer birleştirme (12-byte IV + Ciphertext)
+            const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+            combined.set(iv, 0);
+            combined.set(new Uint8Array(ciphertext), iv.length);
+            return combined;
+        }
+
+        async function decryptText(combinedData) {
+            const dec = new TextDecoder();
+            const data = new Uint8Array(combinedData);
+            
+            // IV ve şifreli metni ayır
+            const iv = data.slice(0, 12);
+            const ciphertext = data.slice(12);
+
+            const decrypted = await crypto.subtle.decrypt(
+                { name: "AES-GCM", iv: iv },
+                cryptoKey,
+                ciphertext
+            );
+            return dec.decode(decrypted);
+        }
+
+        function log(text, isSystem = false, isSelf = false) {
+            const box = document.getElementById('chat-box');
+            const div = document.createElement('div');
+            
+            if(isSystem) div.className = 'msg system';
+            else if(isSelf) div.className = 'msg self';
+            else div.className = 'msg';
+
+            div.innerText = text;
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function updateNodeCount() {
+            document.getElementById('node-status').innerText = `NODES: ${activePeers.size}`;
+        }
+
+        async function init() {
+            log('[*] RedStar şifreleme anahtarları türetiliyor...', true);
+            cryptoKey = await deriveKey(SHARED_PASS);
+
+            log('[*] BitTorrent Tracker sinyalleşme katmanına bağlanılıyor...', true);
+            room = joinRoom({ appId: 'redstar_p2p_app' }, ROOM_ID);
+
+            [sendMessage, getMessage] = room.makeAction('chat');
+
+            room.onPeerJoin(peerId => {
+                activePeers.add(peerId);
+                updateNodeCount();
+                log(`[+] Yeni Düğüm Katıldı (Peer ID: ${peerId.slice(0, 6)})`, true);
+            });
+
+            room.onPeerLeave(peerId => {
+                activePeers.delete(peerId);
+                updateNodeCount();
+                log(`[-] Düğüm Ayrıldı (Peer ID: ${peerId.slice(0, 6)})`, true);
+            });
+
+            getMessage(async (encryptedData, peerId) => {
+                try {
+                    const decrypted = await decryptText(encryptedData);
+                    const parsed = JSON.parse(decrypted);
+                    log(`${parsed.user}: ${parsed.text}`);
+                } catch (e) {
+                    log(`[!] HATA: Şifresi çözülemeyen veya bozuk paket alındı.`, true);
+                }
+            });
+
+            log('[★] RedStar Genel Hücresine Bağlandınız. Mesaj atabilirsiniz.', true);
+        }
+
+        window.sendMsg = async function() {
+            const userInp = document.getElementById('username');
+            const msgInp = document.getElementById('message');
+            const text = msgInp.value.trim();
+            const user = userInp.value.trim() || 'Anon';
+
+            if (!text) return;
+
+            try {
+                const payload = JSON.stringify({ user, text });
+                const encryptedPayload = await encryptText(payload);
+
+                sendMessage(encryptedPayload);
+                log(`${user} (Siz): ${text}`, false, true);
+                msgInp.value = '';
+            } catch (err) {
+                log(`[!] Mesaj gönderilemedi: ${err.message}`, true);
+            }
+        };
+
+        init();
+    </script>
+</body>
+</html>
