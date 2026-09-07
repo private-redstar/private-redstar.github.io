@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -21,10 +20,8 @@
 
         #matrix-canvas {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
             z-index: -1;
             opacity: 0.35;
         }
@@ -44,23 +41,19 @@
 
         #chat-box { 
             border: 1px solid #aa0000; 
-            height: 420px; 
+            height: 400px; 
             overflow-y: auto; 
             padding: 12px; 
             margin-bottom: 15px; 
             background: rgba(3, 0, 0, 0.9); 
             box-shadow: inset 0 0 15px rgba(255, 0, 0, 0.3);
-            backdrop-filter: blur(2px);
         }
-
-        #chat-box::-webkit-scrollbar { width: 6px; }
-        #chat-box::-webkit-scrollbar-thumb { background: #880000; }
 
         .msg { margin-bottom: 8px; word-break: break-all; color: #ff6666; }
         .self { color: #ffffff; font-weight: bold; }
         .system { color: #883333; font-style: italic; }
         
-        .input-group { display: flex; gap: 10px; }
+        .input-group { display: flex; gap: 10px; margin-bottom: 10px; }
         input { 
             background: rgba(5, 0, 0, 0.9); 
             border: 1px solid #aa0000; 
@@ -80,11 +73,12 @@
             cursor: pointer; 
             font-weight: bold; 
             font-family: monospace;
-            text-transform: uppercase;
             box-shadow: 0 0 8px rgba(255, 0, 0, 0.5);
         }
         button:hover { background: #cc0000; color: #fff; }
     </style>
+    <!-- PeerJS Kütüphanesi -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
 
@@ -95,63 +89,56 @@
         <span id="node-status" style="color:#aa0000; font-size:12px; font-weight:bold;">NODES: 0</span>
     </div>
     
-    <p class="system" style="background: rgba(0,0,0,0.7); padding: 5px;">Protocols: Broadcast & WebRTC Mesh | Enc: AES-GCM-256 | Zero Server Logs</p>
+    <p class="system" style="background: rgba(0,0,0,0.7); padding: 5px; margin-bottom:10px;">
+        Kendi Peer ID'n: <span id="my-id" style="color:#fff;">Yükleniyor...</span>
+    </p>
+
+    <!-- Bağlantı Alanı -->
+    <div class="input-group">
+        <input type="text" id="target-id" placeholder="Arkadaşının Peer ID'sini buraya yapıştır...">
+        <button onclick="connectToPeer()">BAĞLAN</button>
+    </div>
     
     <div id="chat-box"></div>
 
     <div class="input-group">
         <input type="text" id="username" placeholder="Rumuz" value="Anon" style="max-width: 120px;">
-        <input type="text" id="message" placeholder="Ağa mesaj bırak..." onkeydown="if(event.key==='Enter') window.sendMsg()">
-        <button onclick="window.sendMsg()">GÖNDER</button>
+        <input type="text" id="message" placeholder="Ağa mesaj bırak..." onkeydown="if(event.key==='Enter') sendMsg()">
+        <button onclick="sendMsg()">GÖNDER</button>
     </div>
 
     <!-- Matrix Rain -->
     <script>
         const canvas = document.getElementById('matrix-canvas');
         const ctx = canvas.getContext('2d');
-
-        function resizeCanvas() {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        }
+        function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
         resizeCanvas();
         window.addEventListener('resize', resizeCanvas);
-
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%&*§ØΞΨ';
         const fontSize = 14;
         let columns = Math.floor(canvas.width / fontSize);
         let drops = Array(columns).fill(1);
-
         function drawMatrix() {
             ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.fillStyle = '#ff0000';
             ctx.font = fontSize + 'px monospace';
-
             for (let i = 0; i < drops.length; i++) {
                 const text = chars.charAt(Math.floor(Math.random() * chars.length));
                 ctx.fillText(text, i * fontSize, drops[i] * fontSize);
-
-                if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
-                    drops[i] = 0;
-                }
+                if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
                 drops[i]++;
             }
         }
         setInterval(drawMatrix, 40);
     </script>
 
-    <!-- P2P Core Engine (Hybrid Broadcast/WebRTC) -->
-    <script style="display:none;">
-        const ROOM_ID = 'REDSTAR_GLOBAL_CELL_2026';
+    <!-- WebRTC P2P Engine -->
+    <script>
         const SHARED_PASS = 'RedStarStaticKey2026!';
-        const MY_PEER_ID = Math.random().toString(36).substring(2, 9);
-
+        let peer = null;
+        let connections = [];
         let cryptoKey = null;
-        let activePeers = new Set();
-        
-        // Yerel sekme içi / cihaz içi %100 doğrudan haberleşme kanalı
-        const localChannel = new BroadcastChannel(ROOM_ID);
 
         async function deriveKey(pass) {
             const enc = new TextEncoder();
@@ -180,20 +167,17 @@
                 cryptoKey,
                 enc.encode(plainText)
             );
-
             const combined = new Uint8Array(iv.length + ciphertext.byteLength);
             combined.set(iv, 0);
             combined.set(new Uint8Array(ciphertext), iv.length);
-            return combined;
+            return Array.from(combined);
         }
 
-        async function decryptText(combinedData) {
+        async function decryptText(combinedArray) {
             const dec = new TextDecoder();
-            const data = new Uint8Array(combinedData);
-            
+            const data = new Uint8Array(combinedArray);
             const iv = data.slice(0, 12);
             const ciphertext = data.slice(12);
-
             const decrypted = await crypto.subtle.decrypt(
                 { name: "AES-GCM", iv: iv },
                 cryptoKey,
@@ -205,92 +189,93 @@
         function log(text, isSystem = false, isSelf = false) {
             const box = document.getElementById('chat-box');
             const div = document.createElement('div');
-            
             if(isSystem) div.className = 'msg system';
             else if(isSelf) div.className = 'msg self';
             else div.className = 'msg';
-
             div.innerText = text;
             box.appendChild(div);
             box.scrollTop = box.scrollHeight;
         }
 
         function updateNodeCount() {
-            document.getElementById('node-status').innerText = `NODES: ${activePeers.size}`;
+            document.getElementById('node-status').innerText = `NODES: ${connections.length}`;
         }
 
         async function init() {
-            log('[*] RedStar şifreleme anahtarları türetiliyor...', true);
+            log('[*] AES-GCM-256 Şifreleme anahtarları oluşturuluyor...', true);
             cryptoKey = await deriveKey(SHARED_PASS);
 
-            log('[*] P2P Hibrit Kanal Oluşturuluyor...', true);
+            // PeerJS sunucusuna bağlan
+            peer = new Peer({
+                config: {'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]}
+            });
 
-            // Dinleme Katmanı
-            localChannel.onmessage = async (event) => {
-                const { type, peerId, payload } = event.data;
+            peer.on('open', (id) => {
+                document.getElementById('my-id').innerText = id;
+                log(`[★] Ağdaki benzersiz kimliğin oluşturuldu.`, true);
+            });
 
-                if (peerId === MY_PEER_ID) return;
-
-                if (type === 'PING') {
-                    if (!activePeers.has(peerId)) {
-                        activePeers.add(peerId);
-                        updateNodeCount();
-                        log(`[+] Yeni Düğüm Katıldı (ID: ${peerId})`, true);
-                    }
-                    // Ping gelince kendimizi bildir
-                    localChannel.postMessage({ type: 'PONG', peerId: MY_PEER_ID });
-                } else if (type === 'PONG') {
-                    if (!activePeers.has(peerId)) {
-                        activePeers.add(peerId);
-                        updateNodeCount();
-                        log(`[+] Düğüm Bulundu (ID: ${peerId})`, true);
-                    }
-                } else if (type === 'MSG') {
-                    try {
-                        const decrypted = await decryptText(payload);
-                        const parsed = JSON.parse(decrypted);
-                        log(`${parsed.user}: ${parsed.text}`);
-                    } catch (e) {
-                        log(`[!] HATA: Şifre çözme başarısız.`, true);
-                    }
-                }
-            };
-
-            // Diğer sekmelere kendimizi duyur
-            localChannel.postMessage({ type: 'PING', peerId: MY_PEER_ID });
-
-            // Her 3 saniyede bir ağdaki canlı düğümleri tara (Heartbeat)
-            setInterval(() => {
-                localChannel.postMessage({ type: 'PING', peerId: MY_PEER_ID });
-            }, 3000);
-
-            log('[★] RedStar Genel Hücresine Bağlandınız. Mesaj atabilirsiniz.', true);
+            // Başkası sana bağlandığında
+            peer.on('connection', (conn) => {
+                setupConnection(conn);
+                log(`[+] Dış düğüm sana bağlandı!`, true);
+            });
         }
 
-        window.sendMsg = async function() {
+        function connectToPeer() {
+            const targetId = document.getElementById('target-id').value.trim();
+            if (!targetId) return log('[!] Lütfen geçerli bir Peer ID girin.', true);
+            
+            log(`[*] ${targetId} düğümüne bağlanılıyor...`, true);
+            const conn = peer.connect(targetId);
+            setupConnection(conn);
+        }
+
+        function setupConnection(conn) {
+            conn.on('open', () => {
+                connections.push(conn);
+                updateNodeCount();
+                log(`[✓] Bağlantı kuruldu! Uçtan uca şifreli sohbet aktif.`, true);
+            });
+
+            conn.on('data', async (data) => {
+                try {
+                    const decrypted = await decryptText(data);
+                    const parsed = JSON.parse(decrypted);
+                    log(`${parsed.user}: ${parsed.text}`);
+                } catch (e) {
+                    log(`[!] HATA: Şifresi çözülemeyen veri paketi.`, true);
+                }
+            });
+
+            conn.on('close', () => {
+                connections = connections.filter(c => c !== conn);
+                updateNodeCount();
+                log(`[-] Bir düğüm ayrıldı.`, true);
+            });
+        }
+
+        async function sendMsg() {
             const userInp = document.getElementById('username');
             const msgInp = document.getElementById('message');
             const text = msgInp.value.trim();
             const user = userInp.value.trim() || 'Anon';
 
             if (!text) return;
-
-            try {
-                const payload = JSON.stringify({ user, text });
-                const encryptedPayload = await encryptText(payload);
-
-                localChannel.postMessage({
-                    type: 'MSG',
-                    peerId: MY_PEER_ID,
-                    payload: encryptedPayload
-                });
-
-                log(`${user} (Siz): ${text}`, false, true);
-                msgInp.value = '';
-            } catch (err) {
-                log(`[!] Mesaj gönderilemedi: ${err.message}`, true);
+            if (connections.length === 0) {
+                return log('[!] Bağlı düğüm yok. Arkadaşının ID\'sini girip BAĞLAN butonuna bas.', true);
             }
-        };
+
+            const payload = JSON.stringify({ user, text });
+            const encryptedPayload = await encryptText(payload);
+
+            connections.forEach(conn => conn.send(encryptedPayload));
+            log(`${user} (Siz): ${text}`, false, true);
+            msgInp.value = '';
+        }
 
         init();
     </script>
