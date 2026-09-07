@@ -94,7 +94,7 @@
         <span id="node-status" style="color:#aa0000; font-size:12px; font-weight:bold;">NODES: 0</span>
     </div>
     
-    <p class="system" style="background: rgba(0,0,0,0.7); padding: 5px;">Protocols: BitTorrent P2P | Enc: AES-GCM-256 | Zero Server Logs</p>
+    <p class="system" style="background: rgba(0,0,0,0.7); padding: 5px;">Protocols: Nostr P2P Relay | Enc: AES-GCM-256 | Zero Server Logs</p>
     
     <div id="chat-box"></div>
 
@@ -104,7 +104,7 @@
         <button onclick="window.sendMsg()">GÖNDER</button>
     </div>
 
-    <!-- Matrix Rain -->
+    <!-- Matrix Rain Background -->
     <script>
         const canvas = document.getElementById('matrix-canvas');
         const ctx = canvas.getContext('2d');
@@ -140,15 +140,25 @@
         setInterval(drawMatrix, 40);
     </script>
 
-    <!-- P2P Core Logic -->
+    <!-- P2P Core Logic (Nostr Strategy + Custom STUN) -->
     <script type="module">
-        import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.18.0/torrent.min.js';
+        // Torrent tracker'ları engellendiği için daha kararlı olan Nostr modülüne geçildi
+        import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.18.0/nostr.min.js';
 
         const ROOM_ID = 'REDSTAR_GLOBAL_CELL_2026';
         const SHARED_PASS = 'RedStarStaticKey2026!';
 
         let room, sendMessage, getMessage, cryptoKey;
         let activePeers = new Set();
+
+        // WebRTC Bağlantısını NAT/Firewall arkasından geçirecek STUN sunucuları
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+            ]
+        };
 
         async function deriveKey(pass) {
             const enc = new TextEncoder();
@@ -178,7 +188,6 @@
                 enc.encode(plainText)
             );
 
-            // Buffer birleştirme (12-byte IV + Ciphertext)
             const combined = new Uint8Array(iv.length + ciphertext.byteLength);
             combined.set(iv, 0);
             combined.set(new Uint8Array(ciphertext), iv.length);
@@ -189,7 +198,6 @@
             const dec = new TextDecoder();
             const data = new Uint8Array(combinedData);
             
-            // IV ve şifreli metni ayır
             const iv = data.slice(0, 12);
             const ciphertext = data.slice(12);
 
@@ -222,8 +230,16 @@
             log('[*] RedStar şifreleme anahtarları türetiliyor...', true);
             cryptoKey = await deriveKey(SHARED_PASS);
 
-            log('[*] BitTorrent Tracker sinyalleşme katmanına bağlanılıyor...', true);
-            room = joinRoom({ appId: 'redstar_p2p_app' }, ROOM_ID);
+            log('[*] P2P Sinyalleşme katmanına bağlanılıyor (Nostr Relays)...', true);
+            
+            // Trystero Nostr konfigürasyonu
+            room = joinRoom(
+                { 
+                    appId: 'redstar_p2p_app',
+                    rtcConfig: rtcConfig 
+                }, 
+                ROOM_ID
+            );
 
             [sendMessage, getMessage] = room.makeAction('chat');
 
@@ -259,6 +275,10 @@
             const user = userInp.value.trim() || 'Anon';
 
             if (!text) return;
+
+            if (activePeers.size === 0) {
+                log(`[!] UYARI: Ağda bağlı başka bir düğüm (NODE) yok. Mesaj iletilemedi. Aynı sayfayı başka bir sekmede/cihazda açıp tekrar dene.`, true);
+            }
 
             try {
                 const payload = JSON.stringify({ user, text });
