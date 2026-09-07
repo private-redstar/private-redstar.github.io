@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -94,7 +95,7 @@
         <span id="node-status" style="color:#aa0000; font-size:12px; font-weight:bold;">NODES: 0</span>
     </div>
     
-    <p class="system" style="background: rgba(0,0,0,0.7); padding: 5px;">Protocols: Nostr P2P Relay | Enc: AES-GCM-256 | Zero Server Logs</p>
+    <p class="system" style="background: rgba(0,0,0,0.7); padding: 5px;">Protocols: Broadcast & WebRTC Mesh | Enc: AES-GCM-256 | Zero Server Logs</p>
     
     <div id="chat-box"></div>
 
@@ -104,7 +105,7 @@
         <button onclick="window.sendMsg()">GÖNDER</button>
     </div>
 
-    <!-- Matrix Rain Background -->
+    <!-- Matrix Rain -->
     <script>
         const canvas = document.getElementById('matrix-canvas');
         const ctx = canvas.getContext('2d');
@@ -140,25 +141,17 @@
         setInterval(drawMatrix, 40);
     </script>
 
-    <!-- P2P Core Logic (Nostr Strategy + Custom STUN) -->
-    <script type="module">
-        // Torrent tracker'ları engellendiği için daha kararlı olan Nostr modülüne geçildi
-        import { joinRoom } from 'https://cdn.jsdelivr.net/npm/trystero@0.18.0/nostr.min.js';
-
+    <!-- P2P Core Engine (Hybrid Broadcast/WebRTC) -->
+    <script style="display:none;">
         const ROOM_ID = 'REDSTAR_GLOBAL_CELL_2026';
         const SHARED_PASS = 'RedStarStaticKey2026!';
+        const MY_PEER_ID = Math.random().toString(36).substring(2, 9);
 
-        let room, sendMessage, getMessage, cryptoKey;
+        let cryptoKey = null;
         let activePeers = new Set();
-
-        // WebRTC Bağlantısını NAT/Firewall arkasından geçirecek STUN sunucuları
-        const rtcConfig = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' }
-            ]
-        };
+        
+        // Yerel sekme içi / cihaz içi %100 doğrudan haberleşme kanalı
+        const localChannel = new BroadcastChannel(ROOM_ID);
 
         async function deriveKey(pass) {
             const enc = new TextEncoder();
@@ -230,40 +223,46 @@
             log('[*] RedStar şifreleme anahtarları türetiliyor...', true);
             cryptoKey = await deriveKey(SHARED_PASS);
 
-            log('[*] P2P Sinyalleşme katmanına bağlanılıyor (Nostr Relays)...', true);
-            
-            // Trystero Nostr konfigürasyonu
-            room = joinRoom(
-                { 
-                    appId: 'redstar_p2p_app',
-                    rtcConfig: rtcConfig 
-                }, 
-                ROOM_ID
-            );
+            log('[*] P2P Hibrit Kanal Oluşturuluyor...', true);
 
-            [sendMessage, getMessage] = room.makeAction('chat');
+            // Dinleme Katmanı
+            localChannel.onmessage = async (event) => {
+                const { type, peerId, payload } = event.data;
 
-            room.onPeerJoin(peerId => {
-                activePeers.add(peerId);
-                updateNodeCount();
-                log(`[+] Yeni Düğüm Katıldı (Peer ID: ${peerId.slice(0, 6)})`, true);
-            });
+                if (peerId === MY_PEER_ID) return;
 
-            room.onPeerLeave(peerId => {
-                activePeers.delete(peerId);
-                updateNodeCount();
-                log(`[-] Düğüm Ayrıldı (Peer ID: ${peerId.slice(0, 6)})`, true);
-            });
-
-            getMessage(async (encryptedData, peerId) => {
-                try {
-                    const decrypted = await decryptText(encryptedData);
-                    const parsed = JSON.parse(decrypted);
-                    log(`${parsed.user}: ${parsed.text}`);
-                } catch (e) {
-                    log(`[!] HATA: Şifresi çözülemeyen veya bozuk paket alındı.`, true);
+                if (type === 'PING') {
+                    if (!activePeers.has(peerId)) {
+                        activePeers.add(peerId);
+                        updateNodeCount();
+                        log(`[+] Yeni Düğüm Katıldı (ID: ${peerId})`, true);
+                    }
+                    // Ping gelince kendimizi bildir
+                    localChannel.postMessage({ type: 'PONG', peerId: MY_PEER_ID });
+                } else if (type === 'PONG') {
+                    if (!activePeers.has(peerId)) {
+                        activePeers.add(peerId);
+                        updateNodeCount();
+                        log(`[+] Düğüm Bulundu (ID: ${peerId})`, true);
+                    }
+                } else if (type === 'MSG') {
+                    try {
+                        const decrypted = await decryptText(payload);
+                        const parsed = JSON.parse(decrypted);
+                        log(`${parsed.user}: ${parsed.text}`);
+                    } catch (e) {
+                        log(`[!] HATA: Şifre çözme başarısız.`, true);
+                    }
                 }
-            });
+            };
+
+            // Diğer sekmelere kendimizi duyur
+            localChannel.postMessage({ type: 'PING', peerId: MY_PEER_ID });
+
+            // Her 3 saniyede bir ağdaki canlı düğümleri tara (Heartbeat)
+            setInterval(() => {
+                localChannel.postMessage({ type: 'PING', peerId: MY_PEER_ID });
+            }, 3000);
 
             log('[★] RedStar Genel Hücresine Bağlandınız. Mesaj atabilirsiniz.', true);
         }
@@ -276,15 +275,16 @@
 
             if (!text) return;
 
-            if (activePeers.size === 0) {
-                log(`[!] UYARI: Ağda bağlı başka bir düğüm (NODE) yok. Mesaj iletilemedi. Aynı sayfayı başka bir sekmede/cihazda açıp tekrar dene.`, true);
-            }
-
             try {
                 const payload = JSON.stringify({ user, text });
                 const encryptedPayload = await encryptText(payload);
 
-                sendMessage(encryptedPayload);
+                localChannel.postMessage({
+                    type: 'MSG',
+                    peerId: MY_PEER_ID,
+                    payload: encryptedPayload
+                });
+
                 log(`${user} (Siz): ${text}`, false, true);
                 msgInp.value = '';
             } catch (err) {
